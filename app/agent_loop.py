@@ -2,6 +2,7 @@
 # 文件名：agent_loop.py
 # 作用：完整版 Agent（ReAct 循环 + DeepSeek API + 多轮对话）
 # ==========================================
+from app.rag import load_and_chunk, retrieve, build_prompt
 
 import os
 import json
@@ -51,14 +52,25 @@ tools_schema = [
 ]
 
 def run_agent(user_input: str, max_steps: int = 5):
-    """Agent 核心循环"""
+    # 【新增】RAG 检索
+    chunks = load_and_chunk()   # 加载知识库（实际项目里会缓存，不用每次都读）
+    retrieved = retrieve(user_input, chunks)   # 检索相关段落
+    
+    if retrieved:
+        print(f"📚 检索到 {len(retrieved)} 条相关资料")
+        # 把检索到的资料拼成增强提示词，代替原始用户输入
+        enhanced_input = build_prompt(user_input, retrieved)
+    else:
+        enhanced_input = user_input
+    
+    # 初始化 messages，用增强后的输入
     messages = [
         {"role": "system", "content": "你是一个智能助手，需要时请调用工具。最终请用中文回答。"},
-        {"role": "user", "content": user_input}
+        {"role": "user", "content": enhanced_input}
     ]
     
     print(f"👤 用户: {user_input}\n")
-    
+    # ... 后面的循环代码保持不变    
     for step in range(max_steps):
         print(f"--- 第 {step + 1} 轮循环 ---")
         
