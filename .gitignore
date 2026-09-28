@@ -9,3 +9,5 @@ __pycache__/
 # 忽略编辑器配置
 .vscode/
 .idea/
+# ChromaDB 缓存
+chroma_db/
