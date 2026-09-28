@@ -1,14 +1,15 @@
 # ==========================================
 # 文件名：agent_loop.py
-# 作用：完整版 Agent（ReAct 循环 + DeepSeek API + 多轮对话）
+# 作用：完整版 Agent（ReAct 循环 + DeepSeek API + RAG + 评估统计）
 # ==========================================
-from app.rag import load_and_chunk, retrieve, build_prompt
 
 import os
 import json
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 from app.tools import TOOLS
+from app.rag import load_and_chunk, retrieve, build_prompt
 
 # 加载 .env 里的 API Key
 load_dotenv()
@@ -19,7 +20,7 @@ client = OpenAI(
     base_url="https://api.deepseek.com"
 )
 
-# 定义工具的 JSON Schema（告诉模型有什么工具可用）
+# 定义工具的 JSON Schema
 tools_schema = [
     {
         "type": "function",
@@ -52,68 +53,82 @@ tools_schema = [
 ]
 
 def run_agent(user_input: str, max_steps: int = 5):
-    # 【新增】RAG 检索
-    chunks = load_and_chunk()   # 加载知识库（实际项目里会缓存，不用每次都读）
-    retrieved = retrieve(user_input, chunks)   # 检索相关段落
-    
+    """Agent 核心循环"""
+    # RAG 检索
+    chunks = load_and_chunk()
+    retrieved = retrieve(user_input, chunks)
     if retrieved:
         print(f"📚 检索到 {len(retrieved)} 条相关资料")
-        # 把检索到的资料拼成增强提示词，代替原始用户输入
         enhanced_input = build_prompt(user_input, retrieved)
     else:
         enhanced_input = user_input
-    
-    # 初始化 messages，用增强后的输入
+
+    # 初始化 messages
     messages = [
         {"role": "system", "content": "你是一个智能助手，需要时请调用工具。最终请用中文回答。"},
         {"role": "user", "content": enhanced_input}
     ]
-    
+
+    # 统计变量
+    total_tokens = 0
+    start_time = time.time()
+    steps_used = 0
+
     print(f"👤 用户: {user_input}\n")
-    # ... 后面的循环代码保持不变    
+
     for step in range(max_steps):
+        steps_used = step + 1
         print(f"--- 第 {step + 1} 轮循环 ---")
-        
-        # 调用 LLM（传入 tools_schema）
+
+        # 调用 LLM
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
             tools=tools_schema,
             tool_choice="auto"
         )
-        
+
+        # 累加 Token 消耗
+        if response.usage:
+            total_tokens += response.usage.total_tokens
+
         msg = response.choices[0].message
         messages.append(msg)
-        
-        # 情况 A：模型直接回答（没有调工具）
+
+        # 情况 A：模型没有调用工具，直接返回最终答案
         if not msg.tool_calls:
             print(f"\n✅ Agent 最终回答: {msg.content}")
+            elapsed = time.time() - start_time
+            print(f"\n📊 本次执行统计：")
+            print(f"   - 循环步数: {steps_used}")
+            print(f"   - 总耗时: {elapsed:.2f} 秒")
+            print(f"   - Token 消耗: {total_tokens}")
             return msg.content
-        
+
         # 情况 B：模型决定调用工具
         for tool_call in msg.tool_calls:
             func_name = tool_call.function.name
             func_args = json.loads(tool_call.function.arguments)
-            
+
             print(f"🛠️ 模型决定调用工具: {func_name}，参数: {func_args}")
-            
-            # 执行工具
+
             if func_name in TOOLS:
                 result = TOOLS[func_name](**func_args)
             else:
                 result = f"未知工具: {func_name}"
-            
+
             print(f"👁️ 观察结果: {result}\n")
-            
+
             # 把工具结果回填给模型
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
                 "content": str(result)
             })
-    
+
     print("⚠️ 达到最大步数，任务未完成。")
     return None
+
 
 if __name__ == "__main__":
     print("🤖 Agent 已启动，输入 'quit' 或 'exit' 退出。\n")
@@ -123,4 +138,4 @@ if __name__ == "__main__":
             print("👋 再见！")
             break
         run_agent(user_input)
-        print("\n" + "="*50 + "\n")
+        print("\n" + "=" * 50 + "\n")
